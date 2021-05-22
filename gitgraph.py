@@ -10,20 +10,38 @@ from typing import Dict, List, Tuple
 class Vector():
 
     commit: Commit = {}
-    parents = 0
-    children = 0
-    parsed = False
+    parents: List[str] = []
+    children: List[str] = []
+    processed = False
 
     def __init__(self, commit: Commit):
         self.commit = commit
+        self.parents = []
+        self.children = []
 
-    def incrementChildren(self):
-        self.children += 1
+    def __repr__(self):
+        return 'Vector {0}: commit: {{ hexsha: {1}, parents: {2} }}, parents: {3}, children: {4}, processed: {5}'.format(
+            self.commit.hexsha, self.commit.hexsha, self.commit.parents, 
+            self.parents, self.children, self.processed)
+    
+    def __str__(self):
+        return 'Vector {0}: commit: {{ hexsha: {1}, parents: {2} }}, parents: {3}, children: {4}, processed: {5}'.format(
+            self.commit.hexsha, self.commit.hexsha, self.commit.parents, 
+            self.parents, self.children, self.processed)
+
+    def __eq__(self, other):
+        if isinstance(other, self.__class__):
+            return self.commit.hexsha == other.commit.hexsha
+        else:
+            return False
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
 class GitGraph():
 
     repo = {}
-    vectors: Dict[str, Vector] = dict()     # all commits; including terminal, sequential, and structural commits
-    edges: List[Tuple[Commit, Commit]] = [] # all edges; including those linking sequential commits
+    vectors: Dict[str, Vector] = dict()                     # all commits
+    edges: List[Tuple[str, str]] = []                       # all edges
 
     def __init__(self, root: PathLike):
         self.repo = Repo(root)
@@ -31,83 +49,66 @@ class GitGraph():
     def __addEdge__(self, start: str, end: str):
         candidate = [start, end]
         existing = list(filter(lambda e: candidate == e, self.edges))
-        if len(existing) == 0: # no duplicate directed edges
+        if len(existing) == 0:                              # no duplicate directed edges
             self.edges.append(candidate)
 
-    def __addCommit__(self, commit: Commit) -> bool:
-        if self.vectors.get(commit.hexsha) is None: # no duplicate commits
+    def __addVector__(self, commit: Commit) -> bool:
+        if self.vectors.get(commit.hexsha) is None:         # no duplicate commits
             self.vectors.update({commit.hexsha: Vector(commit)})
-            self.vectors.get(commit.hexsha).parents = len(commit.parents)
 
-    def __addParent__(self, parent: Commit, child: str):
-        if self.vectors.get(parent.hexsha) is None:
-            self.__addCommit__(self.repo.commit(parent.hexsha))
-        self.vectors.get(parent.hexsha).incrementChildren()
-        self.__addEdge__(child, parent.hexsha)
+    def __addParent__(self, parent: str, child: Commit):
+        self.__addVector__(self.repo.commit(parent)) # guarantees parent vector exists
+        self.vectors.get(parent.hexsha).children.append(child.hexsha)
+        self.__addEdge__(child.hexsha, parent.hexsha)
+    
+    def __parseParents__(self, child: Commit):
+        if self.vectors.get(child.hexsha).processed is False:
+            self.vectors.get(child.hexsha).processed = True
+            for parent in child.parents:
+                self.vectors.get(child.hexsha).parents.append(parent.hexsha)
+                self.__addParent__(parent, child)
 
     def parse(self):
         branches = filter(lambda ref: ref not in self.repo.tags, self.repo.refs)
         progress = tqdm(list(branches))
-
         for branch in progress:
             progress.set_description('{0}'.format(branch))
             for commit in self.repo.iter_commits(branch):
-                if self.vectors.get(commit.hexsha) is None: # no duplicate commits
-                    self.__addCommit__(commit)
-                    for parent in commit.parents:
-                        self.vectors.get(commit.hexsha).parsed = True
-                        self.__addParent__(parent, commit.hexsha)
-                else:
-                    # back propogation needed to handle unparsed parent vectors for their child links
-                    if self.vectors.get(commit.hexsha).parsed is False:
-                        for parent in commit.parents:
-                            self.__addParent__(parent, commit.hexsha)
+                self.__addVector__(commit)                  # only add none duplicate vectors
+                self.__parseParents__(commit)               # only add none duplicate parent vectors and edges
     
     def prune(self):
-        sequentials = list(filter(lambda vector: vector.parents == 1 and vector.children == 1, self.vectors.values()))
+        sequentials = tqdm(list(filter(lambda vector: len(vector.parents) == 1 and len(vector.children) == 1, self.vectors.values())))
         for sequential in sequentials:
-            # (parent) <--- [seq.hexsha, parent.hexsha] --- (seq) <--- [child.hexsha, seq.hexsha] --- (child)
-            # (parent) <--- [child.hexsha, parent.hexsha] --- (child)
+            sequentials.set_description('{0}'.format(sequential.commit.hexsha))
 
             # handle the parent vector
-            # parent = self.vectors[sequential.commit.parents[0].hexsha]
-            # parentEdges = list(filter(lambda edge: [sequential.commit.hexsha, parent.commit.hexsha] == edge, self.edges))
+            parent = self.vectors[sequential.parents[0]]
+            parentEdges = list(filter(lambda edge: [sequential.commit.hexsha, sequential.parents[0]] == edge, self.edges))
+            for edge in parentEdges:
+                self.edges.remove(edge)
 
             # handle the child vector
-            child = list(filter(lambda vector: sequential.commit.hexsha in vector.commit.parents, self.vectors.values()))
-            for vector in self.vectors.values():
-                # print('commit: {0}, parent: {1}'.format(vector.commit.hexsha, len(vector.commit.parents)))
-                if sequential.commit.hexsha in vector.commit.parents:
-                    print('FOUND IT! commit: {0}, vector: {1}'.format(sequential.commit.hexsha, vector.commit.hexsha))
-                for parent in vector.commit.parents:
-                    if sequential.commit.hexsha == parent:
-                        print('FOUND IT! parent: {0}'.format(parent))
+            child = self.vectors.get(sequential.children[0])
+            childEdges = list(filter(lambda edge: [sequential.children[0], sequential.commit.hexsha] == edge, self.edges))
+            for edge in childEdges:
+                self.edges.remove(edge)
 
-            # childEdges = list(filter(lambda edge: [child[0].commit.hexsha, sequential.commit.hexsha] == edge, self.edges))
-
-            # print('parent: {0}, child: {1}'.format(parent.commit.hexsha, len(child)))
-            # print('parentEdges: {0}, childEdges: {1}'.format(len(parentEdges), len(childEdges)))
-
-            # self.edges.remove(parentEdge)
-            # self.edges.remove(childEdge)
-            # self.__addEdge__(child.commit.hexsha, parent.commit.hexsha)
+            # add edge between child and parent, bypassing the commit
+            if child is not None and parent is not None:
+                self.__addEdge__(child.commit.hexsha, parent.commit.hexsha)
 
             # remove the sequential vector
-            # self.vectors.pop(sequential.commit.hexsha)
+            self.vectors.pop(sequential.commit.hexsha)
 
     def print(self):
         print('Vectors: {0}, Edges: {1}'.format(len(self.vectors), len(self.edges)))
-        terminal = list(filter(lambda vector: vector.parents == 0 or vector.children == 0, self.vectors.values()))
-        sequential = list(filter(lambda vector: vector.parents == 1 and vector.children == 1, self.vectors.values()))
-        structural = list(filter(lambda vector: (vector not in terminal) and (vector.parents + vector.children) > 2, self.vectors.values()))
-        print('  Terminal: {0}'.format(len(terminal)))
-        print('  Sequential: {0}'.format(len(sequential)))
-        print('  Structural: {0}'.format(len(structural)))
-
-        parentless = list(filter(lambda vector: vector.parents == 0, terminal))
-        childless = list(filter(lambda vector: vector.children == 0, terminal))
-        print('  Parentless Terminals: {0}'.format(len(parentless)))
-        print('  Childless Terminals: {0}'.format(len(childless)))
+        terminals = list(filter(lambda vector: len(vector.parents) == 0 or len(vector.children) == 0, self.vectors.values()))
+        sequentials = list(filter(lambda vector: len(vector.parents) == 1 and len(vector.children) == 1, self.vectors.values()))
+        structurals = list(filter(lambda vector: (vector not in terminals) and (len(vector.parents) + len(vector.children)) > 2, self.vectors.values()))
+        print('  Terminals: {0}'.format(len(terminals)))
+        print('  Sequentials: {0}'.format(len(sequentials)))
+        print('  Structurals: {0}'.format(len(structurals)))
 
 parser = argparse.ArgumentParser()
 parser.add_argument("root")
@@ -115,5 +116,5 @@ args = parser.parse_args()
 
 graph = GitGraph(args.root)
 graph.parse()
-# graph.prune()
+graph.prune()
 graph.print()
