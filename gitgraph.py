@@ -5,7 +5,12 @@ from git import Repo
 from git.objects.commit import Commit
 from git.types import PathLike
 from typing import Dict, List, Tuple
+from enum import Enum
 
+class CommitType (Enum):
+    TERMINAL = 1
+    SEQUENTIAL = 2
+    STRUCTURAL = 3
 
 class Vector():
 
@@ -13,6 +18,9 @@ class Vector():
     parents: List[str] = []
     children: List[str] = []
     processed = False
+    branching = False
+    merging = False
+    types: CommitType
 
     def __init__(self, commit: Commit):
         self.commit = commit
@@ -77,6 +85,26 @@ class GitGraph():
                 self.__addVector__(commit)                  # only add none duplicate vectors
                 self.__parseParents__(commit)               # only add none duplicate parent vectors and edges
     
+    def assign(self):
+        terminals = list(filter(lambda vector: len(vector.parents) == 0 or len(vector.children) == 0, self.vectors.values()))
+        sequentials = list(filter(lambda vector: len(vector.parents) == 1 and len(vector.children) == 1, self.vectors.values()))
+        structurals = list(filter(lambda vector: (vector not in terminals) and (len(vector.parents) + len(vector.children)) > 2, self.vectors.values()))
+        branching = list (filter (lambda vector: (len(vector.children) > 1) and (len(vector.parents) >= 1), self.vectors.values()))
+        merging = list (filter (lambda vector: (len(vector.children) >= 1) and (len(vector.parents) > 1), self.vectors.values()))
+
+        vectors = list (self.vectors.values())
+        for vector in vectors:
+            if (vector in terminals):
+                vector.types = CommitType.TERMINAL
+            if (vector in sequentials):
+                vector.types = CommitType.SEQUENTIAL
+            if (vector in structurals):
+                vector.types = CommitType.STRUCTURAL
+            if (vector in branching):
+                vector.branching = True
+            if (vector in merging):
+                vector.merging = True
+
     def prune(self):
         sequentials = tqdm(list(filter(lambda vector: len(vector.parents) == 1 and len(vector.children) == 1, self.vectors.values())))
         for sequential in sequentials:
@@ -117,4 +145,4 @@ args = parser.parse_args()
 graph = GitGraph(args.root)
 graph.parse()
 graph.prune()
-graph.print()
+graph.assign()
