@@ -25,7 +25,7 @@ def SameDirection(child, parent, edges):
 	return len([And(child == x, parent == y) for x, y in edges]) >= 2
 
 vectors = list(graph.vectors.values())
-s.add(Or([And(Compare(vector1, vector2)) for vector1, vector2 in list(zip(vectors, vectors[1:] + vectors[:1]))]))
+s.add(Or([And(Compare(vector1, vector2), StartAndEnd(vector1, vector2), SameDirection(vector1, vector2, graph.edges)) for vector1, vector2 in list(zip(vectors, vectors[1:] + vectors[:1]))]))
 
 
 
