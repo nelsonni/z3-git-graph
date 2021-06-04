@@ -4,7 +4,7 @@ from tqdm import tqdm # for progressbar
 from git import Repo
 from git.objects.commit import Commit
 from git.types import PathLike
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union
 from enum import Enum
 
 class CommitType (Enum):
@@ -75,6 +75,9 @@ class GitGraph():
             for parent in child.parents:
                 self.vectors.get(child.hexsha).parents.append(parent.hexsha)
                 self.__addParent__(parent, child)
+
+    def getData(self) -> Dict[str, Union[List[Vector], List[Tuple[str, str]]]]:
+        return { "vectors": list(self.vectors.values()), "edges": List[Tuple[str, str]] }
 
     def parse(self):
         branches = filter(lambda ref: ref not in self.repo.tags, self.repo.refs)
