@@ -1,42 +1,50 @@
 import argparse
-from pysmt.shortcuts import Symbol, And, Not, get_model, is_sat
-from typing import List, Tuple
+from pysmt.shortcuts import Equals, Symbol, And, Not, GE, Int, get_model
+from pysmt.typing import INT
 from z3 import *
-import gitgraph
+from gitgraph import GitGraph, Vertex
 
 parser = argparse.ArgumentParser()
 parser.add_argument("root")
 args = parser.parse_args()
 
-graph = gitgraph.GitGraph(args.root).getData()
+graph = GitGraph(args.root).getData()
 
-s = Solver()
+def isTerminal(v: Vertex):
+	return Bool(v.terminal)
 
-def Compare(vector1: gitgraph.Vector, vector2: gitgraph.Vector):
-	return vector1.commit.hexsha != vector2.commit.hexsha
+def isStructural(v: Vertex):
+	return Equals(v.structural, True)
 
-def StartAndEnd(vector1: gitgraph.Vector, vector2: gitgraph.Vector):
-	return Or(And(vector1.branching == True, vector2.merging == True), And(vector1.merging== True, vector2.branching == True))
+def isBranching(v: Vertex):
+	return Equals(v.branching, True)
 
-def Contains(vector1: gitgraph.Vector, vector2: gitgraph.Vector, edges: List[Tuple[str, str]]):
-    return Or([And(vector1 == x, vector2 == y) for x, y in edges])
+def isMerging(v: Vertex):
+	return Equals(v.merging, True)
 
-def SameDirection(child: gitgraph.Vector, parent: gitgraph.Vector, edges: List[Tuple[str, str]]):
-	return len([And(child == x, parent == y) for x, y in edges]) >= 2
+def uniqCommitType(v: Vertex):
+	return Or( And(isTerminal(v), Not(isStructural(v))), And(Not(isTerminal(v)), isStructural(v)) )
 
+validTypes = And([ isTerminal(v) for v in graph.vertices ])
 
-vectorList = list(graph.vectors.values())
-vectors = list(zip(graph.vectors, graph.vectors[1:] + graph.vectors[:1]))
-formula = Or([And(Compare(vector1, vector2), StartAndEnd(vector1, vector2), SameDirection(vector1, vector2, graph.edges)) for vector1, vector2 in vectors])
-s.add(formula)
+def branchThenMerge(u: Vertex, v: Vertex):
+	return Implies(isBranching(u), isMerging(v))
+
+def multipleEdges(u: Vertex, v: Vertex):
+	count = Symbol(len([Equals(child, v.commit.hexsha) for child in u.children]), INT)
+	return GE(count, Int(2))
+
+validOrdering = Or([ branchThenMerge(u,v) for u,v in graph ])
+
+formula = validTypes
 
 # # Solve:
-r = s.check()
-print("Solver said: %s" % r)
-model = s.model()
-print(model)
+model = get_model(formula)
 if model:
-    print(eval(formula))
+	print(model)
+	print(eval(formula))
+else:
+	print("No solution found")
 
 # if r == sat:
 #     m = s.model()
