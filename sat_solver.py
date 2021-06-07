@@ -8,9 +8,13 @@ parser.add_argument("root")
 args = parser.parse_args()
 
 graph = GitGraph(args.root)
-graph.print()
-domains = And([ Or(v.terminal, v.sequential) for v in graph.vertices ])
-# result = [graph.vertices[i:i+2] for i in range(len(graph.vertices)-2+1)]
+# graph.print()
+# print("PAIRS:")
+# for pair in graph.pairwise():
+#     print(pair)
+
+# domains = And([ Or(v.terminal, v.sequential) for v in graph.vertices ])
+# result = [graph.vertices[i:i+2 ] for i in range(len(graph.vertices)-2+1)]
 # print(result)
 # problem = And([And(v.structural, u.structural) for v,u in   ])
 

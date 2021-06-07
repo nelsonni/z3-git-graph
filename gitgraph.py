@@ -1,4 +1,7 @@
 import argparse
+import re
+from itertools import tee, count
+from git.util import IterableList
 from tqdm import tqdm # for progressbar
 from git import Repo
 from git.objects.commit import Commit
@@ -7,7 +10,6 @@ from typing import Dict, List, Tuple
 
 class Vertex():
 
-    branch: str = ''
     commit: Commit = {}
     parents: List[str] = []
     children: List[str] = []
@@ -17,9 +19,8 @@ class Vertex():
     sequential = False
     structural = False
 
-    def __init__(self, commit: Commit, branch: str):
+    def __init__(self, commit: Commit):
         self.commit = commit
-        self.branch = branch
         self.parents = [parent.hexsha for parent in commit.parents]
         self.children = []
 
@@ -27,7 +28,7 @@ class Vertex():
         return self.commit.hexsha
 
     def __repr__(self):
-        return '{0}\n\tparents: {1}\n\tchildren: {2}\n\tterminal: {3}\n\tsequential: {4}\n\tstructural: {5}\n'.format(self.commit.hexsha, self.parents, self.children, self.terminal, self.sequential, self.structural)
+        return '{0}\n\tparents: {1}\n\tchildren: {2}\n\tterminal: {3}\n\tsequential: {4}\n\tstructural: {5}\n\tbranching: {6}\n\tmerging: {7}\n'.format(self.commit.hexsha, self.parents, self.children, self.terminal, self.sequential, self.structural, self.branching, self.merging)
     
     def __str__(self):
         return self.__repr__()
@@ -41,36 +42,91 @@ class Vertex():
     def __ne__(self, other):
         return not self.__eq__(other)
 
+class Branch():
+
+    branch: str = ''
+    names: List[str] = []
+    vertices: List[Vertex] = []
+
+    def __init__(self, branch: str, remotes: IterableList):
+        self.branch = str(branch)
+        self.names = [str(remote) + '/' + self.branch for remote in remotes]
+        self.names.append(self.branch)
+
+    def __eq__(self, other):
+        if isinstance(other, self.__class__):
+            return other.branch in self.names
+        else:
+            return False
+    
+    def __repr__(self):
+        return '{0}\n\tnames: {1}\n\tvertices: {2}\n'.format(self.branch, self.names, [v.commit.hexsha for v in self.vertices])
+    
+    def __str__(self):
+        return self.__repr__()
+    
+    def __find__(self, vertex: Vertex) -> Tuple[bool, int]:
+        existing = False
+        index = -1
+        for i, v in enumerate(self.vertices):
+            if vertex.commit.hexsha == v.commit.hexsha:
+                existing = True
+            if vertex.commit.hexsha in [p.hexsha for p in v.commit.parents]:
+                index = i
+        return [existing, index]
+
+    def sliding_window(iterable, n=2):
+        iterables = tee(iterable, n)
+    
+        for iterable, num_skipped in zip(iterables, count()):
+            for _ in range(num_skipped):
+                next(iterable, None)
+    
+        return zip(*iterables)
+
+    def addVertex(self, vertex: Vertex):
+        [existing, index] = self.__find__(vertex)
+        print('{0} addVertex({1}) -> existing: {2}, index: {3}'.format(self.branch, vertex.commit.hexsha, existing, index))
+        if not existing:
+            if index >= 0:
+                print('\tadding vertex {0} at index {1}'.format(vertex.commit.hexsha, index))
+                self.vertices.insert(index, vertex)
+            else:
+                print('\tappending vertex {0} at end of list'.format(vertex.commit.hexsha))
+                self.vertices.append(vertex)
+        
+
 class GitGraph():
 
     repo = {}
-    branches: List[str] = []                                # all branches; 'alias/name' format (e.g. 'origin/main')
-    vertices: List[Vertex] = []                             # all vertices; [hexsha: Vertex] format
+    branches: List[Branch] = []                             # all branches; [branch: [hexsha, ...]] format (branch format: 'alias/name')
+    vertices: Dict[str, Vertex] = dict()                    # all vertices; [hexsha: Vertex] format
     edges: List[Tuple[Vertex, Vertex]] = []                 # all directed edges; [start, end] format
 
     def __init__(self, root: PathLike):
         self.repo = Repo(root)
-        self.branches = list(filter(lambda ref: ref not in self.repo.tags, self.repo.refs))
         self.parse()
 
-    def __addEdge__(self, start: Vertex, end: Vertex):
+    def __getEdge__(self, start: Vertex, end: Vertex) -> Tuple[Vertex, Vertex]:
         candidate = [start, end]
         existing = list(filter(lambda e: candidate == e, self.edges))
         if len(existing) == 0:                              # no duplicate directed edges
             self.edges.append(candidate)
+        return candidate
 
-    def __addVertex__(self, commit: Commit, branch: str):
-        # print("addVertex: {0}".format(commit.hexsha))
-        exists = len([v for v in self.vertices if v.commit.hexsha == commit.hexsha]) > 0
-        if not exists:                                      # no duplicate commits
-            self.vertices.append(Vertex(commit, branch))
-
-    def __getVertex__(self, hexsha: str):
-        search = [v for v in self.vertices if v.commit.hexsha == hexsha]
-        return search[0] if len(search) > 0 else None
-
-    def __updateVertex__(self, updated: Vertex):
-        [updated if updated.commit.hexsha == vertex.commit.hexsha else vertex for vertex in self.vertices]
+    def __getVertex__(self, commit: Commit) -> Vertex:
+        vertex = self.vertices.get(commit.hexsha)
+        if vertex is None:                                  # no duplicate commits
+            vertex = Vertex(commit)
+            self.vertices.update({ commit.hexsha: vertex })
+        return vertex
+    
+    def __getBranch__(self, branchName: str) -> Branch:
+        branch = Branch(branchName, self.repo.remotes)
+        existing = [b for b in self.branches if b == branch]
+        if len(existing) == 0:                              # no duplicate branches
+            self.branches.append(branch)
+        return branch
 
     def __categorize__(self, vertex: Vertex):
         if (len(vertex.parents) == 0 or len(vertex.children) == 0):
@@ -79,31 +135,52 @@ class GitGraph():
             vertex.sequential = True
         if (len(vertex.parents) + len(vertex.children) > 2):
             vertex.structural = True
-        if (len(vertex.children) > 1 and len(vertex.parents) > 0):
+        if (len(vertex.children) > 1):
             vertex.branching = True
-        if (len(vertex.children) > 0 and len(vertex.parents) > 1):
+        if (len(vertex.parents) > 1):
             vertex.merging = True
-        self.__updateVertex__(vertex)
+        print(vertex)
+        self.vertices.update({ vertex.commit.hexsha: vertex })
 
     def parse(self):
         print("Parsing git for branches and commits...")
-        progress = tqdm(self.branches)
+        branches = list(filter(lambda ref: ref not in self.repo.tags and str(ref) != 'origin/HEAD', self.repo.refs))
+        progress = tqdm(branches)
+        prevBranchRef = None
         for branch in progress:
             progress.set_description('{0}'.format(branch))
-            for commit in self.repo.iter_commits(branch):
-                self.__addVertex__(commit, branch)          # only add none duplicate vectors
+            branchRef = self.__getBranch__(branch)
+            if (prevBranchRef):
+                same = prevBranchRef == branchRef
+                print("prev: {0}, curr: {1}, same: {2}".format(prevBranchRef.branch, branchRef.branch, same))
+            prevBranchRef = branchRef
 
-        print("Parsing vertices for parent and child linkage...")
-        progress = tqdm(self.vertices)
-        for vertex in progress:
-            progress.set_description('{0}'.format(vertex.commit.hexsha))
-            for hexsha in vertex.parents:
-                parent = self.__getVertex__(hexsha)
-                if parent:
-                    self.__addEdge__(vertex, parent)
-                    parent.children.append(vertex.commit.hexsha)
-                    self.__updateVertex__(parent)
-            self.__categorize__(vertex)
+            for commit in self.repo.iter_commits(branch):
+                # print('Commit {0} on branch {1}'.format(commit.hexsha, branch))
+                vertex = self.__getVertex__(commit)
+                self.__getBranch__(branch).addVertex(vertex)
+            # print("Branch {0} has {1} vertices".format(branchRef.branch, len(branchRef.vertices)))
+
+        print('Vectors: {0}, Edges: {1}, Branches: {2}'.format(len(self.vertices), len(self.edges), len(self.branches)))
+        for branch in self.branches:
+            print('Branch: {0}'.format(branch))
+
+        # print("Parsing vertices for parent and child linkage...")
+        # progress = tqdm(self.vertices)
+        # for vertex in progress:
+        #     progress.set_description('{0}'.format(vertex.commit.hexsha))
+        #     for hexsha in vertex.parents:
+        #         parent = self.vertices.get(hexsha)
+        #         if parent:
+        #             self.__addEdge__(vertex, parent)
+        #             parent.children.append(vertex.commit.hexsha)
+        #             self.__updateVertex__(parent)
+        # [self.__categorize__(vertex) for vertex in self.vertices]   # wait to categorize until after all vertices have been added
+
+    def pairwise(self):
+        a, b = tee(self.vertices)
+        next(b, None)
+        return zip(a, b)
     
     def prune(self):
         print("Pruning sequential vertices from the graph...")
