@@ -44,14 +44,11 @@ class Vertex():
 
 class Branch():
 
-    branch: str = ''
-    names: List[str] = []
-    vertices: List[Vertex] = []
-
     def __init__(self, branch: str, remotes: IterableList):
-        self.branch = str(branch)
-        self.names = [str(remote) + '/' + self.branch for remote in remotes]
+        self.branch: str = str(branch)
+        self.names: List[str] = [str(remote) + '/' + self.branch for remote in remotes]
         self.names.append(self.branch)
+        self.vertices: List[Vertex] = []
 
     def __eq__(self, other):
         if isinstance(other, self.__class__):
@@ -94,17 +91,17 @@ class Branch():
             else:
                 print('\tappending vertex {0} at end of list'.format(vertex.commit.hexsha))
                 self.vertices.append(vertex)
+        print('Branch {0} has {1} vertices'.format(self.branch, len(self.vertices)))
         
 
 class GitGraph():
 
-    repo = {}
-    branches: List[Branch] = []                             # all branches; [branch: [hexsha, ...]] format (branch format: 'alias/name')
-    vertices: Dict[str, Vertex] = dict()                    # all vertices; [hexsha: Vertex] format
-    edges: List[Tuple[Vertex, Vertex]] = []                 # all directed edges; [start, end] format
-
     def __init__(self, root: PathLike):
         self.repo = Repo(root)
+        self.branches: List[Branch] = []                    # all branches; [branch: [hexsha, ...]] format (branch format: 'alias/name')
+        self.vertices: Dict[str, Vertex] = dict()           # all vertices; [hexsha: Vertex] format
+        self.edges: List[Tuple[Vertex, Vertex]] = []        # all directed edges; [start, end] format
+
         self.parse()
 
     def __getEdge__(self, start: Vertex, end: Vertex) -> Tuple[Vertex, Vertex]:
@@ -126,7 +123,9 @@ class GitGraph():
         existing = [b for b in self.branches if b == branch]
         if len(existing) == 0:                              # no duplicate branches
             self.branches.append(branch)
-        return branch
+            return branch
+        else:
+            return existing[0]
 
     def __categorize__(self, vertex: Vertex):
         if (len(vertex.parents) == 0 or len(vertex.children) == 0):
