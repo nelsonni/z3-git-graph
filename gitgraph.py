@@ -10,19 +10,15 @@ from typing import Dict, List, Tuple
 
 class Vertex():
 
-    commit: Commit = {}
-    parents: List[str] = []
-    children: List[str] = []
-    branching = False
-    merging = False
-    terminal = False
-    sequential = False
-    structural = False
-
     def __init__(self, commit: Commit):
-        self.commit = commit
-        self.parents = [parent.hexsha for parent in commit.parents]
+        self.commit: Commit = commit
+        self.parents: List[str] = [parent.hexsha for parent in commit.parents]
         self.children = []
+        self.branching = False
+        self.merging = False
+        self.terminal = False
+        self.sequential = False
+        self.structural = False
 
     def __hash__(self):
         return self.commit.hexsha
@@ -83,15 +79,11 @@ class Branch():
 
     def addVertex(self, vertex: Vertex):
         [existing, index] = self.__find__(vertex)
-        print('{0} addVertex({1}) -> existing: {2}, index: {3}'.format(self.branch, vertex.commit.hexsha, existing, index))
         if not existing:
             if index >= 0:
-                print('\tadding vertex {0} at index {1}'.format(vertex.commit.hexsha, index))
                 self.vertices.insert(index, vertex)
             else:
-                print('\tappending vertex {0} at end of list'.format(vertex.commit.hexsha))
                 self.vertices.append(vertex)
-        print('Branch {0} has {1} vertices'.format(self.branch, len(self.vertices)))
         
 
 class GitGraph():
@@ -101,8 +93,10 @@ class GitGraph():
         self.branches: List[Branch] = []                    # all branches; [branch: [hexsha, ...]] format (branch format: 'alias/name')
         self.vertices: Dict[str, Vertex] = dict()           # all vertices; [hexsha: Vertex] format
         self.edges: List[Tuple[Vertex, Vertex]] = []        # all directed edges; [start, end] format
-
         self.parse()
+
+    def __iter__(self):
+        return GitGraphIterator(self)
 
     def __getEdge__(self, start: Vertex, end: Vertex) -> Tuple[Vertex, Vertex]:
         candidate = [start, end]
@@ -138,48 +132,30 @@ class GitGraph():
             vertex.branching = True
         if (len(vertex.parents) > 1):
             vertex.merging = True
-        print(vertex)
         self.vertices.update({ vertex.commit.hexsha: vertex })
 
     def parse(self):
         print("Parsing git for branches and commits...")
         branches = list(filter(lambda ref: ref not in self.repo.tags and str(ref) != 'origin/HEAD', self.repo.refs))
         progress = tqdm(branches)
-        prevBranchRef = None
         for branch in progress:
             progress.set_description('{0}'.format(branch))
-            branchRef = self.__getBranch__(branch)
-            if (prevBranchRef):
-                same = prevBranchRef == branchRef
-                print("prev: {0}, curr: {1}, same: {2}".format(prevBranchRef.branch, branchRef.branch, same))
-            prevBranchRef = branchRef
-
             for commit in self.repo.iter_commits(branch):
-                # print('Commit {0} on branch {1}'.format(commit.hexsha, branch))
                 vertex = self.__getVertex__(commit)
                 self.__getBranch__(branch).addVertex(vertex)
-            # print("Branch {0} has {1} vertices".format(branchRef.branch, len(branchRef.vertices)))
 
-        print('Vectors: {0}, Edges: {1}, Branches: {2}'.format(len(self.vertices), len(self.edges), len(self.branches)))
-        for branch in self.branches:
-            print('Branch: {0}'.format(branch))
-
-        # print("Parsing vertices for parent and child linkage...")
-        # progress = tqdm(self.vertices)
-        # for vertex in progress:
-        #     progress.set_description('{0}'.format(vertex.commit.hexsha))
-        #     for hexsha in vertex.parents:
-        #         parent = self.vertices.get(hexsha)
-        #         if parent:
-        #             self.__addEdge__(vertex, parent)
-        #             parent.children.append(vertex.commit.hexsha)
-        #             self.__updateVertex__(parent)
-        # [self.__categorize__(vertex) for vertex in self.vertices]   # wait to categorize until after all vertices have been added
-
-    def pairwise(self):
-        a, b = tee(self.vertices)
-        next(b, None)
-        return zip(a, b)
+        print("Parsing vertices for parent and child linkage...")
+        # progress = tqdm(list(self.vertices.values()))
+        for vertex in self.vertices.values():
+            # progress.set_description('{0}'.format(vertex.commit.hexsha))
+            for hexsha in vertex.parents:
+                parent = self.vertices.get(str(hexsha))
+                if parent:
+                    self.__getEdge__(vertex, parent)
+                    parent.children.append(vertex.commit.hexsha)
+                    vertex.parents.append(parent)
+        [self.__categorize__(vertex) for vertex in self.vertices.values()]   # wait to categorize until after all vertices have been added
+        # self.print()
     
     def prune(self):
         print("Pruning sequential vertices from the graph...")
@@ -210,41 +186,48 @@ class GitGraph():
             self.vertices.pop(sequential.commit.hexsha)
 
     def print(self, show_all = False):
-        print('Vectors: {0}, Edges: {1}'.format(len(self.vertices), len(self.edges)))
-        print('  Terminals: {0}'.format(len(list(filter(lambda vertex: vertex.terminal == True, self.vertices)))))
-        print('  Sequentials: {0}'.format(len(list(filter(lambda vertex: vertex.sequential == True, self.vertices)))))
-        print('  Structurals: {0}'.format(len(list(filter(lambda vertex: vertex.structural == True, self.vertices)))))
-        print('  Branching: {0}'.format(len(list(filter(lambda vertex: vertex.branching == True, self.vertices)))))
-        print('  Merging: {0}'.format(len(list(filter(lambda vertex: vertex.merging == True, self.vertices)))))
+        print('Vectors: {0}, Edges: {1}, Branches: {2}'.format(len(self.vertices), len(self.edges), len(self.branches)))
+        print('  Terminals: {0}'.format(len(list(filter(lambda vertex: vertex.terminal == True, self.vertices.values())))))
+        print('  Sequentials: {0}'.format(len(list(filter(lambda vertex: vertex.sequential == True, self.vertices.values())))))
+        print('  Structurals: {0}'.format(len(list(filter(lambda vertex: vertex.structural == True, self.vertices.values())))))
+        print('  Branching: {0}'.format(len(list(filter(lambda vertex: vertex.branching == True, self.vertices.values())))))
+        print('  Merging: {0}'.format(len(list(filter(lambda vertex: vertex.merging == True, self.vertices.values())))))
         if show_all:
             print("VERTICES:")
-            for v in self.vertices:
+            for v in self.vertices.values():
                 print(v)
             print("EDGES:")
             for e in self.edges:
                 print(e)
-            # for key, value in self.items():
-            #     print(key, ' : ', value)
-
+            print("BRANCHES:")
+            for b in self.branches:
+                print(b)
 
 class GitGraphIterator:
 
     def __init__(self, graph: GitGraph):
         self._graph = graph
         self._branch_index = 0
-        self._vertex_index = 0
+        self._branch_vertices = []
+        self._pairs_index = 0
+
+    def pairwise(self, iterable):
+        a, b = tee(iterable)
+        next(b, None)
+        return zip(a, b)
 
     def __next__(self):
         if self._branch_index < len(self._graph.branches):
-            branchVertices = [v for v in self._graph.vertices if v.branch == self._graph.branches[self._branch_index]]
-            if self._vertex_index == len(branchVertices):
-                self._branch_index += 1
-                self._vertex_index = 0
-                branchVertices = self._graph.branches.keys()[self._branch_index]
-            if self._vertex_index < len(branchVertices):
-                result = branchVertices[self._vertex_index]
-                self._vertex_index += 1
-                return result
+            if len(self._branch_vertices) == 0:                 # handle the first iteration through a branch
+                self._branch_vertices = list(self.pairwise(self._graph.branches[self._branch_index].vertices))
+            if self._pairs_index == len(self._branch_vertices): # handle the end of the interations of a branch
+                self._branch_index += 1                     
+                self._branch_vertices = list(self.pairwise(self._graph.branches[self._branch_index].vertices))
+                self._pairs_index = 0
+            if self._pairs_index < len(self._branch_vertices):  # handle the middle of the interations of a branch
+                pair = self._branch_vertices[self._pairs_index]
+                self._pairs_index += 1
+                return pair
         raise StopIteration
 
 class GitGraphData():

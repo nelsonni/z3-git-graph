@@ -1,6 +1,5 @@
 import argparse
 from pysmt.shortcuts import Symbol, Or, And, GE, LT, Plus, Equals, Int, get_model
-from pysmt.typing import INT
 from gitgraph import GitGraph
 
 parser = argparse.ArgumentParser()
@@ -9,9 +8,9 @@ args = parser.parse_args()
 
 graph = GitGraph(args.root)
 # graph.print()
-# print("PAIRS:")
-# for pair in graph.pairwise():
-#     print(pair)
+print("PAIRS:")
+for (a,b) in graph:
+    print("a: {0}, b: {1}".format(a.commit.hexsha,b.commit.hexsha))
 
 # domains = And([ Or(v.terminal, v.sequential) for v in graph.vertices ])
 # result = [graph.vertices[i:i+2 ] for i in range(len(graph.vertices)-2+1)]
