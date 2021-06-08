@@ -94,16 +94,14 @@ class GitGraph():
         self.vertices: Dict[str, Vertex] = dict()           # all vertices; [hexsha: Vertex] format
         self.edges: List[Tuple[Vertex, Vertex]] = []        # all directed edges; [start, end] format
         self.parse()
+        self.prune()
+        self.print()
 
     def __iter__(self):
         return GitGraphIterator(self)
 
-    def __getEdge__(self, start: Vertex, end: Vertex) -> Tuple[Vertex, Vertex]:
-        candidate = [start, end]
-        existing = list(filter(lambda e: candidate == e, self.edges))
-        if len(existing) == 0:                              # no duplicate directed edges
-            self.edges.append(candidate)
-        return candidate
+    def __addEdge__(self, start: Vertex, end: Vertex):
+        self.edges.append([start, end])
 
     def __getVertex__(self, commit: Commit) -> Vertex:
         vertex = self.vertices.get(commit.hexsha)
@@ -150,43 +148,50 @@ class GitGraph():
             # progress.set_description('{0}'.format(vertex.commit.hexsha))
             for hexsha in vertex.parents:
                 parent = self.vertices.get(str(hexsha))
-                if parent:
-                    self.__getEdge__(vertex, parent)
+                if parent: 
+                    self.__addEdge__(vertex, parent)
                     parent.children.append(vertex.commit.hexsha)
-                    vertex.parents.append(parent)
+        
         [self.__categorize__(vertex) for vertex in self.vertices.values()]   # wait to categorize until after all vertices have been added
-        # self.print()
     
     def prune(self):
         print("Pruning sequential vertices from the graph...")
-        sequentials = tqdm(list(filter(lambda vertex: len(vertex.parents) == 1 and len(vertex.children) == 1, self.vertices.values())))
+        sequentials = tqdm(list(filter(lambda vertex: vertex.sequential == True, self.vertices.values())))
         for sequential in sequentials:
             sequentials.set_description('{0}'.format(sequential.commit.hexsha))
+            sequential = self.vertices.get(sequential.commit.hexsha)    # get any updated vertex information
 
             # handle the parent vertex
-            parent = self.vertices[sequential.parents[0]]
-            parentEdges = list(filter(lambda edge: [sequential.commit.hexsha, sequential.parents[0]] == edge, self.edges))
+            parent = self.vertices[sequential.parents[0]]           # sequential means only one parent
+            parentEdges = list(filter(lambda edge: [sequential, self.vertices.get(sequential.parents[0])] == edge, self.edges))
             for edge in parentEdges:
                 self.edges.remove(edge)
 
             # handle the child vertex
-            child = self.vertices.get(sequential.children[0])
-            childEdges = list(filter(lambda edge: [sequential.children[0], sequential.commit.hexsha] == edge, self.edges))
+            child = self.vertices.get(sequential.children[0])       # sequential means only one child
+            childEdges = list(filter(lambda edge: [self.vertices.get(sequential.children[0]), sequential] == edge, self.edges))
             for edge in childEdges:
                 self.edges.remove(edge)
 
+            # handle the branches
+            for branch in self.branches:
+                for vertex in branch.vertices:
+                    if vertex == sequential:
+                        branch.vertices.remove(vertex)
+
             # add edge between child and parent, bypassing the commit
             if child is not None and parent is not None:
-                self.__addEdge__(child.commit.hexsha, parent.commit.hexsha)
+                child.parents = [parent.commit.hexsha if p == sequential.commit.hexsha else p for p in child.parents]
+                parent.children = [child.commit.hexsha if c == sequential.commit.hexsha else c for c in parent.children]
+                self.vertices.update({ child.commit.hexsha: child })
+                self.vertices.update({ parent.commit.hexsha: parent })
+                self.__addEdge__(child, parent)
 
             # remove the sequential vertex
-            branchVertices = self.branches.get(sequential.branch)
-            if branchVertices:
-                self.branches.update({sequential.branch: branchVertices.remove(sequential)})
             self.vertices.pop(sequential.commit.hexsha)
 
     def print(self, show_all = False):
-        print('Vectors: {0}, Edges: {1}, Branches: {2}'.format(len(self.vertices), len(self.edges), len(self.branches)))
+        print('Vertices: {0}, Edges: {1}, Branches: {2}'.format(len(self.vertices), len(self.edges), len(self.branches)))
         print('  Terminals: {0}'.format(len(list(filter(lambda vertex: vertex.terminal == True, self.vertices.values())))))
         print('  Sequentials: {0}'.format(len(list(filter(lambda vertex: vertex.sequential == True, self.vertices.values())))))
         print('  Structurals: {0}'.format(len(list(filter(lambda vertex: vertex.structural == True, self.vertices.values())))))
@@ -217,6 +222,7 @@ class GitGraphIterator:
         return zip(a, b)
 
     def __next__(self):
+        print(len(self._graph.vertices))
         if self._branch_index < len(self._graph.branches):
             if len(self._branch_vertices) == 0:                 # handle the first iteration through a branch
                 self._branch_vertices = list(self.pairwise(self._graph.branches[self._branch_index].vertices))
